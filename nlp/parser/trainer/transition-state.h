@@ -100,6 +100,12 @@ class SemparState
   Store *store() { return instance_->store; }
   int num_tokens() const { return instance_->document->num_tokens(); }
 
+  string current_token_text() const {
+    int c = current();
+    return (c >= 0 && c < num_tokens()) ? document()->token(c).text() :
+        StrCat("<", c, ">");
+  }
+
   syntaxnet::dragnn::ComponentTrace *mutable_trace() {
     CHECK(trace_ != nullptr) << "Trace is not initialized";
     return trace_;

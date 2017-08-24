@@ -79,6 +79,9 @@ DEFINE_string(word_embeddings,
               "word2vec-embedding-bi-true-32.tf.recordio",
               "Pretrained word embeddings TF recordio. Should have a "
               "dimensionality of FLAGS_word_embeddings_dim.");
+DEFINE_string(word_dictionary,
+              "/usr/local/google/home/grahul/sempar_ontonotes/allowed-words",
+              "Dictionary of valid words. All other words are deemed unknown.");
 DEFINE_bool(oov_lstm_features, true,
             "Whether fallback features (shape, suffix etc) should "
             "be used in the LSTMs");
@@ -171,7 +174,7 @@ void AddFixedFeature(ComponentSpec *component,
   f->set_name(name);
   f->set_fml(fml);
   f->set_embedding_dim(embedding_dim);
-  f->set_predicate_map("hashed");
+  f->set_predicate_map("none");
 }
 
 void AddLinkedFeature(ComponentSpec *component,
@@ -301,13 +304,17 @@ void OutputMasterSpec(Artifacts *artifacts) {
   AddFixedFeature(lr_lstm, "words", "word", FLAGS_word_embeddings_dim);
 
   if (FLAGS_oov_lstm_features) {
-    AddFixedFeature(lr_lstm, "suffix", "suffix(length=3)", 16);
+    //AddFixedFeature(lr_lstm, "suffix", "suffix(length=3)", 16);
     AddFixedFeature(
         lr_lstm, "shape",
         "digit hyphen punctuation quote capitalization", 8);
   }
   AddResource(
       lr_lstm, "commons", artifacts->commons_filename, "store", "encoded");
+  if (!FLAGS_word_dictionary.empty()) {
+    AddResource(
+        lr_lstm, "allowed-words", FLAGS_word_dictionary, "text", "text");
+  }
 
   // Right to left LSTM.
   auto *rl_lstm = artifacts->spec.add_component();

@@ -109,15 +109,6 @@ cc_library(
 )
 
 cc_library(
-  name = "workspace",
-  hdrs = ["workspace.h"],
-  srcs = [],
-  deps = [
-      "//base",
-  ],
-)
-
-cc_library(
   name = "shared-resources",
   hdrs = ["shared-resources.h"],
   srcs = ["shared-resources.cc"],

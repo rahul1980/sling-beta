@@ -46,6 +46,8 @@
 
 set -eux
 
+readonly COMMAND=`echo $0 $@`
+
 # Input resources and arguments.
 SEM=$HOME/sempar_ontonotes
 COMMONS=${SEM}/commons
@@ -54,7 +56,8 @@ TRAIN_FILEPATTERN=${SEM}/train.zip
 DEV_GOLD_FILEPATTERN=${SEM}/dev.gold.zip
 DEV_NOGOLD_FILEPATTERN=${SEM}/dev.without-gold.zip
 WORD_EMBEDDINGS_DIM=32
-PRETRAINED_WORD_EMBEDDINGS=
+PRETRAINED_WORD_EMBEDDINGS=$SEM/word2vec-embedding-bi-true-32.tf.recordio
+ALLOWED_WORDS=$SEM/allowed-words
 OOV_FEATURES=true
 
 # Training hyperparameters.
@@ -68,6 +71,7 @@ ADAM_BETA2=0.999
 ADAM_EPS=0.00001
 GRAD_CLIP_NORM=1.0
 DROPOUT=1.0
+PRETRAIN_STEPS=100
 TRAIN_STEPS=100000
 DECAY_STEPS=50000
 MOVING_AVERAGE=true
@@ -125,12 +129,20 @@ case $i in
     TRAIN_STEPS="${i#*=}"
     shift
     ;;
+    --pretrain_steps=*|--num_pretrain_steps=*)
+    PRETRAIN_STEPS="${i#*=}"
+    shift
+    ;;
     --word_embeddings_dim=*|--word_dim=*|--word_embedding_dim=*)
     WORD_EMBEDDINGS_DIM="${i#*=}"
     shift
     ;;
     --word_embeddings=*|--pretrained_embeddings=*|--pretrained_word_embeddings=*)
     PRETRAINED_WORD_EMBEDDINGS="${i#*=}"
+    shift
+    ;;
+    --allowed_words=*)
+    ALLOWED_WORDS="${i#*=}"
     shift
     ;;
     --oov_features=*|--oov_lstm_features=*)
@@ -213,6 +225,12 @@ HYPERPARAMS+="use_moving_average:${MOVING_AVERAGE} dropout_rate:${DROPOUT} "
 HYPERPARAMS+="gradient_clip_norm:${GRAD_CLIP_NORM} adam_beta1:${ADAM_BETA1} "
 HYPERPARAMS+="adam_beta2:${ADAM_BETA2} adam_eps:${ADAM_EPS}"
 
+set +x
+readonly COMMAND_FILE="${OUTPUT_FOLDER}/command"
+echo "Writing command to ${COMMAND_FILE}"
+echo $COMMAND > ${COMMAND_FILE}
+set -x
+
 if [[ "$MAKE_SPEC" -eq 1 ]];
 then
   bazel build -c opt nlp/parser/trainer:generate-master-spec
@@ -222,6 +240,7 @@ then
     --output_dir=${OUTPUT_FOLDER} \
     --word_embeddings=${PRETRAINED_WORD_EMBEDDINGS} \
     --word_embeddings_dim=${WORD_EMBEDDINGS_DIM} \
+    --word_dictionary=${ALLOWED_WORDS} \
     --oov_lstm_features=${OOV_FEATURES}
 fi
 
@@ -239,7 +258,8 @@ then
     --dev_corpus_without_gold=${DEV_NOGOLD_FILEPATTERN} \
     --batch_size=${BATCH_SIZE} \
     --report_every=${REPORT_EVERY} \
-    --train_steps=${TRAIN_STEPS}
+    --train_steps=${TRAIN_STEPS} \
+    --pretrain_steps=${PRETRAIN_STEPS}
 fi
 
 echo "Done."
