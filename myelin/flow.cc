@@ -123,35 +123,35 @@ const TypeTraits &TypeTraits::of(string &name) {
   return f != typemap.end() ? typetraits[f->second] : typetraits[DT_INVALID];
 }
 
-string TypeTraits::str(void *data) const {
+string TypeTraits::str(const void *data) const {
   if (data == nullptr) return "null";
   switch (type_) {
     case DT_INT8:
-      return std::to_string(*reinterpret_cast<int8 *>(data));
+      return std::to_string(*reinterpret_cast<const int8 *>(data));
 
     case DT_INT16:
-      return std::to_string(*reinterpret_cast<int16 *>(data));
+      return std::to_string(*reinterpret_cast<const int16 *>(data));
 
     case DT_INT32:
-      return std::to_string(*reinterpret_cast<int32 *>(data));
+      return std::to_string(*reinterpret_cast<const int32 *>(data));
 
     case DT_INT64:
-      return std::to_string(*reinterpret_cast<int64 *>(data));
+      return std::to_string(*reinterpret_cast<const int64 *>(data));
 
     case DT_UINT8:
-      return std::to_string(*reinterpret_cast<uint8 *>(data));
+      return std::to_string(*reinterpret_cast<const uint8 *>(data));
 
     case DT_UINT16:
-      return std::to_string(*reinterpret_cast<uint16 *>(data));
+      return std::to_string(*reinterpret_cast<const uint16 *>(data));
 
     case DT_FLOAT:
-      return std::to_string(*reinterpret_cast<float *>(data));
+      return std::to_string(*reinterpret_cast<const float *>(data));
 
     case DT_DOUBLE:
-      return std::to_string(*reinterpret_cast<double *>(data));
+      return std::to_string(*reinterpret_cast<const double *>(data));
 
     case DT_BOOL:
-      return (*reinterpret_cast<bool *>(data)) ? "true" : "false";
+      return (*reinterpret_cast<const bool *>(data)) ? "true" : "false";
 
     default:
       return "???";
@@ -167,36 +167,36 @@ Transformations::~Transformations() {
 class Parser {
  public:
   // Initialize parser with input buffer.
-  Parser(char *ptr, char *end) : ptr_(ptr), end_(end) {}
+  Parser(const char *ptr, const char *end) : ptr_(ptr), end_(end) {}
 
   // Get data buffer from input and advance the current input pointer.
-  char *Get(int len) {
+  const char *Get(int len) {
     CHECK_LE(len, end_ - ptr_) << "Unexpected end of input";
-    char *p = ptr_;
+    const char *p = ptr_;
     ptr_ += len;
     return p;
   }
 
   // Get next integer from input.
   int GetInt() {
-    return *reinterpret_cast<int *>(Get(4));
+    return *reinterpret_cast<const int *>(Get(4));
   }
 
   // Get next 64-bit integer from input.
   uint64_t GetLong() {
-    return *reinterpret_cast<uint64_t *>(Get(8));
+    return *reinterpret_cast<const uint64_t *>(Get(8));
   }
 
   // Get next length-prefixed string from input.
   string GetString() {
     int len = GetInt();
-    char *str = Get(len);
+    const char *str = Get(len);
     return string(str, len);
   }
 
  private:
-  char *ptr_;  // current position
-  char *end_;  // end of input buffer
+  const char *ptr_;  // current position
+  const char *end_;  // end of input buffer
 };
 
 // Flow file writer.
@@ -311,10 +311,11 @@ string Flow::Variable::TypeString() const {
 
 string Flow::Variable::DataString() const {
   // Locate data.
-  char *p  = data;
+  const char *p = data;
+  if (p == nullptr) return "∅";
   if (ref) {
+    p = *reinterpret_cast<const char * const *>(p);
     if (p == nullptr) return "null";
-    p = *reinterpret_cast<char **>(p);
   }
   if (shape.partial()) return "*";
 
@@ -437,7 +438,7 @@ void Flow::Operation::RemoveOutput(Variable *var) {
 
   // Remove variable from outputs.
   auto f = std::find(outputs.begin(), outputs.end(), var);
-  CHECK(f != inputs.end());
+  CHECK(f != outputs.end());
   outputs.erase(f);
 }
 
@@ -558,14 +559,21 @@ Status Flow::Load(const string &filename) {
   CHECK(file->GetSize(&size));
   char *data = AllocateMemory(size);
   file->ReadOrDie(data, size);
-  CHECK(file->Close());
+  st = file->Close();
+  if (!st.ok()) return st;
 
+  Read(data, size);
+  return Status::OK;
+}
+
+void Flow::Read(const char *data, size_t size) {
   // Read header.
   Parser parser(data, data + size);
   int magic = parser.GetInt();
-  CHECK_EQ(magic, kMagic) << filename << " is not a flow file";
+  CHECK_EQ(magic, kMagic) << "not a flow file";
   int version = parser.GetInt();
-  CHECK_EQ(version, kVersion) << "unsupported flow file version";
+  CHECK(version >= 3 && version <= 4)
+      << "unsupported flow file version " << version;
 
   // Read variables.
   int num_vars = parser.GetInt();
@@ -689,7 +697,31 @@ Status Flow::Load(const string &filename) {
     }
   }
 
-  return Status::OK;
+  // Read data blocks.
+  if (version >= 4) {
+    int num_blobs = parser.GetInt();
+    for (int i = 0; i < num_blobs; ++i) {
+      // Create new blob.
+      Blob *blob = new Blob;
+      blobs_.push_back(blob);
+
+      // Get blob name and type.
+      blob->name = parser.GetString();
+      blob->type = parser.GetString();
+
+      // Get attributes.
+      int num_attrs = parser.GetInt();
+      for (int j = 0; j < num_attrs; ++j) {
+        string name = parser.GetString();
+        string value = parser.GetString();
+        blob->attrs.Set(name, value);
+      }
+
+      // Get data.
+      blob->size = parser.GetLong();
+      if (blob->size != 0) blob->data = parser.Get(blob->size);
+    }
+  }
 }
 
 void Flow::Save(const string &filename, int version) const {
@@ -779,6 +811,24 @@ void Flow::Save(const string &filename, int version) const {
       file.WriteString(link->name);
     }
   }
+
+  // Write data blocks.
+  if (version >= 4) {
+    file.WriteInt(blobs_.size());
+    for (const Blob *blob : blobs_) {
+      file.WriteString(blob->name);
+      file.WriteString(blob->type);
+      file.WriteInt(blob->attrs.size());
+      for (const auto &attr : blob->attrs) {
+        file.WriteString(attr.name);
+        file.WriteString(attr.value);
+      }
+      file.WriteInt64(blob->size);
+      if (blob->data != nullptr) {
+        file.Write(blob->data, blob->size);
+      }
+    }
+  }
 }
 
 void Flow::Analyze(const Transformations &transformations) {
@@ -789,6 +839,14 @@ void Flow::Analyze(const Transformations &transformations) {
 }
 
 void Flow::InferInputsAndOutputs() {
+  // Connector links are considered both inputs and outputs.
+  for (Connector *cnx : cnxs_) {
+    for (Variable *link : cnx->links) {
+      link->in = true;
+      link->out = true;
+    }
+  }
+
   for (Variable *var : vars_) {
     // Check the input and output attributes of the producing op.
     bool input_set = false;
@@ -902,39 +960,99 @@ Flow::Operation *Flow::Fuse(Operation *first,
   return first;
 }
 
-std::vector<Flow::Operation *> Flow::Find(const std::vector<string> &ops) {
-  CHECK(!ops.empty());
-  std::vector<Operation *> matches;
-  const string &last = ops.back();
-  for (Operation *op : ops_) {
-    // Look for ops which match the last op in the sequence.
-    if (op->type != last) continue;
+std::vector<Flow::Operation *> Flow::Find(const string &pathexpr) {
+  Path path;
+  ParsePath(pathexpr, &path);
+  return Find(path);
+}
 
-    // Check for match by traversing backwards though the first input of each
-    // op in the sequence.
+std::vector<Flow::Operation *> Flow::Find(const std::vector<string> &nodes) {
+  Path path;
+  for (auto &node : nodes) ParsePath(node, &path);
+  return Find(path);
+}
+
+std::vector<Flow::Operation *> Flow::Find(std::initializer_list<string> nodes) {
+  Path path;
+  for (auto &node : nodes) ParsePath(node, &path);
+  return Find(path);
+}
+
+std::vector<Flow::Operation *> Flow::Find(const Path &path) {
+  // Get the last node in the path.
+  CHECK(!path.empty());
+  const Node &last = path.back();
+
+  std::vector<Operation *> matches;
+  for (Operation *op : ops_) {
+    // Look for ops which match the last node in the path.
+    if (op->type != last.type) continue;
+
+    // Check for match by traversing backwards.
     Operation *current = op;
     bool match = true;
-    for (int i = ops.size() - 2; i >= 0; --i) {
+    int input = last.input;
+    for (int i = path.size() - 2; i >= 0; --i) {
+      const Node &node = path[i];
+
       // Follow producer chain.
-      if (current->inputs.empty()) {
+      if (input >= current->inputs.size()) {
         match = false;
         break;
       }
-      current = current->inputs[0]->producer;
-      if (current == nullptr) {
+      Variable *var = current->inputs[input];
+      Operation *next = var->producer;
+      if (next == nullptr) {
+        match = false;
+        break;
+      }
+      if (node.output >= next->outputs.size() ||
+          next->outputs[node.output] != var) {
+        match = false;
+        break;
+      }
+      current = next;
+      input = node.input;
+
+      // Check if op type matches.
+      if (current->type != node.type) {
         match = false;
         break;
       }
 
-      // Check if op type matches.
-      if (current->type != ops[i]) {
-        match = false;
-        break;
-      }
     }
     if (match) matches.push_back(op);
   }
+
   return matches;
+}
+
+void Flow::ParsePath(const string &pathexpr, Path *path) {
+  int pos = 0;
+  while (pos < pathexpr.size()) {
+    // Get end of next node.
+    int next = pathexpr.find('|', pos);
+    if (next == -1) next = pathexpr.size();
+
+    // Parse next node in path {<input>:}<type>{:<output>}.
+    Node node;
+    int begin = pos;
+    int end = next;
+    int colon = pathexpr.find(':', begin);
+    if (colon > begin && colon < end) {
+      node.input = std::stoi(pathexpr.substr(begin, colon - begin));
+      begin = colon + 1;
+    }
+    colon = pathexpr.rfind(':', end);
+    if (colon > begin && colon < end) {
+      node.output = std::stoi(pathexpr.substr(colon + 1, end - (colon + 1)));
+      end = colon - 1;
+    }
+    node.type = pathexpr.substr(begin, end - begin);
+
+    path->push_back(node);
+    pos = next + 1;
+  }
 }
 
 Flow::Function *Flow::Extract(const string &name,
@@ -1023,6 +1141,7 @@ void Flow::Eliminate(Operation *op) {
     }
     if (output->in) input->in = true;
     if (output->out) input->out = true;
+    if (output->ref) input->ref = true;
     for (Operation *target : ops_) {
       for (int i = 0; i < target->inputs.size(); ++i) {
         if (target->inputs[i] == output) {
@@ -1070,7 +1189,7 @@ static bool CompareOpOrder(Flow::Operation *o1, Flow::Operation *o2) {
 struct PriorityComparator {
   bool operator ()(Flow::Operation *o1, Flow::Operation *o2) {
     if (o1->priority == o2->priority) {
-      return o1->order < o2->order;
+      return o1->order > o2->order;
     } else {
       return o1->priority > o2->priority;
     }
@@ -1324,6 +1443,13 @@ Flow::Connector *Flow::AddConnector(const string &name) {
   return cnx;
 }
 
+Flow::Blob *Flow::AddBlob(const string &name) {
+  Blob *blob = new Blob;
+  blobs_.push_back(blob);
+  blob->name = name;
+  return blob;
+}
+
 void Flow::DeleteVariable(Variable *var) {
   auto f = std::find(vars_.begin(), vars_.end(), var);
   if (f != vars_.end()) vars_.erase(f);
@@ -1331,14 +1457,35 @@ void Flow::DeleteVariable(Variable *var) {
 }
 
 void Flow::DeleteOperation(Operation *op) {
+  // Remove op from function.
   Function *func = op->func;
   if (func != nullptr) {
     auto f = std::find(func->ops.begin(), func->ops.end(), op);
     if (f != func->ops.end()) func->ops.erase(f);
   }
+
+  // Remove op from flow.
   auto f = std::find(ops_.begin(), ops_.end(), op);
   if (f != ops_.end()) ops_.erase(f);
   delete op;
+}
+
+void Flow::RemoveOperation(Operation *op) {
+  // Remove inputs.
+  for (Flow::Variable *input : op->inputs) {
+    auto fc = std::find(input->consumers.begin(), input->consumers.end(), op);
+    CHECK(fc != input->consumers.end());
+    input	->consumers.erase(fc);
+  }
+
+  // Remove outputs.
+  for (Flow::Variable *output : op->outputs) {
+    CHECK(output->producer == op);
+    output->producer = nullptr;
+  }
+
+  // Delete op.
+  DeleteOperation(op);
 }
 
 bool Flow::IsConsistent() const {
