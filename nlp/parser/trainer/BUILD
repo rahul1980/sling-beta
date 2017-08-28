@@ -60,6 +60,7 @@ cc_library(
     "//frame:store",
     "//nlp/document:document",
     "//third_party/syntaxnet",
+  ],
   srcs = [],
 )
 
