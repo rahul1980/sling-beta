@@ -103,6 +103,11 @@ class CombineTransformer : public Transformer {
       if (var->consumers[0]->type != second) continue;
       if (var->consumers[0]->task != op->task) continue;
       if (var->out) continue;
+      if (op->indegree() >= 1) {
+        // Only combine for vector inputs.
+        Flow::Variable *input = op->inputs[0];
+        if (input->rank() == 2 && input->dim(0) > 1) continue;
+      }
 
       flow->Fuse(op, var->consumers[0], combined);
       return true;
@@ -124,6 +129,8 @@ class StandardTyper : public Typer {
         Flow::Variable *a = op->inputs[0];
         Flow::Variable *b = op->inputs[1];
         Flow::Variable *c = op->outputs[0];
+
+        if (c->type == DT_INVALID) c->type = a->type;
 
         // Matrix multiplied by matrix.
         if (a->rank() == 2 && b->rank() == 2 && a->dim(1) == b->dim(0)) {
@@ -165,6 +172,10 @@ class StandardTyper : public Typer {
         for (Flow::Variable *out : op->outputs) {
           out->shape = shape;
         }
+
+        if (op->outputs[0]->type == DT_INVALID) {
+          op->outputs[0]->type = op->inputs[0]->type;
+        }
         return true;
       }
     }
@@ -178,7 +189,7 @@ class StandardTyper : public Typer {
         if (axis->type == DT_INT32 &&
             axis->rank() == 0 &&
             axis->data != nullptr) {
-          int a = *reinterpret_cast<int *>(axis->data);
+          int a = *reinterpret_cast<const int *>(axis->data);
           Shape concat = op->inputs[0]->shape;
           bool compatible = true;
           for (int i = 1; i < n; ++i) {
@@ -212,13 +223,36 @@ class StandardTyper : public Typer {
             shape->rank() == 1 &&
             shape->data != nullptr) {
           // The output shape is constant.
-          int *dims = reinterpret_cast<int *>(shape->data);
+          const int *dims = reinterpret_cast<const int *>(shape->data);
           result->shape.clear();
           for (int d = 0; d < shape->dim(0); ++d) {
             result->shape.add(dims[d] == -1 ? 1 : dims[d]);
           }
+          if (op->outputs[0]->type == DT_INVALID) {
+            op->outputs[0]->type = op->inputs[0]->type;
+          }
           return true;
         }
+      }
+    }
+
+    // Infer shape for gather operation.
+    if (op->type == "Gather") {
+      // For the 2-arg form tf.gather(params, indices):
+      //   result.type = params.dtype.
+      //   result.shape = indices.shape + params.shape[1:].
+      // https://www.tensorflow.org/api_docs/python/tf/gather
+      // Note that there is also a 3-arg form tf.gather(params, indices, axis).
+      if (op->indegree() == 2 && op->outdegree() == 1) {
+        Flow::Variable *params = op->inputs[0];
+        Flow::Variable *indices = op->inputs[1];
+        Flow::Variable *result = op->outputs[0];
+        result->type = params->type;
+        result->shape = indices->shape;
+        for (int i = 1; i < params->shape.rank(); ++i) {
+          result->shape.add(params->shape.dim(i));
+        }
+        return true;
       }
     }
 

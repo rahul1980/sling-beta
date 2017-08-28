@@ -54,7 +54,7 @@ static size_t Align(size_t n, int align) {
   return (n + align - 1) & ~(align - 1);
 }
 
-static char *AllocateMemory(size_t size, int alignment) {
+static char *MemAlloc(size_t size, int alignment) {
   DCHECK(IsPowerOfTwo32(alignment));
   DCHECK_GE(alignment, sizeof(void *));
   char *data;
@@ -64,7 +64,7 @@ static char *AllocateMemory(size_t size, int alignment) {
   return data;
 }
 
-static void FreeMemory(char *data) {
+static void MemFree(char *data) {
   free(data);
 }
 
@@ -72,13 +72,13 @@ static void FreeMemory(char *data) {
 class BasicRuntime : public Runtime {
  public:
   void AllocateInstance(Instance *instance) override {
-    char *data = AllocateMemory(instance->size(), instance->alignment());
+    char *data = MemAlloc(instance->size(), instance->alignment());
     memset(data, 0, instance->size());
     instance->set_data(data);
   }
 
   void FreeInstance(Instance *instance) override {
-    FreeMemory(instance->data());
+    MemFree(instance->data());
   }
 
   void ClearInstance(Instance *instance) override {
@@ -116,12 +116,13 @@ class InstanceAllocator {
   // Initialize instance allocator for cell and placement.
   InstanceAllocator(Cell *cell, Placement placement) : placement_(placement) {
     if (placement == HOST) {
-      instance_size_ = &cell->instance_size_;
+      max_instance_size_ = &cell->instance_size_;
       instance_alignment_ = &cell->instance_alignment_;
     } else {
-      instance_size_ = &cell->device_instance_size_;
+      max_instance_size_ = &cell->device_instance_size_;
       instance_alignment_ = &cell->device_instance_alignment_;
     }
+    current_instance_size_ = *max_instance_size_;
   }
 
   // Allocate space for variable in instance data block.
@@ -175,17 +176,18 @@ class InstanceAllocator {
 
     if (offset == -1) {
       // No free space in instance block. Extend the instance block and add new
-      // variable at the end. First, ensure alignment of variable in instance.
-      size_t aligned = Align(*instance_size_, align);
-      if (aligned > *instance_size_) {
-        // Insert alignment padding in free list.
-        Insert(*instance_size_, aligned);
-        *instance_size_ = aligned;
+      // variable at the end.
+      size_t end = current_instance_size_;
+      size_t aligned = Align(end, align);
+      offset = aligned;
+      current_instance_size_ = aligned + size;
+      if (current_instance_size_ > *max_instance_size_) {
+        *max_instance_size_ = current_instance_size_;
       }
-
-      // Allocate variable at the end of the instance block.
-      offset = *instance_size_;
-      *instance_size_ += size;
+      if (aligned > end) {
+        // Insert alignment padding in free list.
+        Insert(end, aligned);
+      }
     }
 
     // Ensure that instance has at least the same alignment as the tensor.
@@ -297,6 +299,17 @@ class InstanceAllocator {
       // Insert new entry before the current entry.
       freelist_.emplace(it, start, end);
     }
+
+    // Remove last free list entry if this extends to the end of the current
+    // instance block.
+    if (!freelist_.empty()) {
+      auto &last = freelist_.back();
+      if (last.second == current_instance_size_) {
+        current_instance_size_ = last.first;
+        freelist_.pop_back();
+      }
+    }
+
     DCHECK(FreeListConsistent());
   }
 
@@ -304,11 +317,14 @@ class InstanceAllocator {
   // device instance data block.
   Placement placement_;
 
-  // Current instance size.
-  size_t *instance_size_;
+  // Maximum size of instance.
+  size_t *max_instance_size_;
 
-  // Current instance alignment.
+  // Maximum instance alignment.
   int *instance_alignment_;
+
+  // Current instance size.
+  size_t current_instance_size_;
 
   // List of free blocks (start,end) in instance.
   std::list<std::pair<size_t, size_t>> freelist_;
@@ -486,7 +502,7 @@ string Tensor::TypeString() const {
 }
 
 Channel::~Channel() {
-  FreeMemory(data_);
+  MemFree(data_);
 }
 
 void Channel::resize(int n) {
@@ -513,13 +529,12 @@ void Channel::reserve(int n) {
   if (n == capacity_) return;
 
   // Allocate new data buffer.
-  char *buffer =
-    AllocateMemory(n * connector_->size(), connector_->alignment());
+  char *buffer = MemAlloc(n * connector_->size(), connector_->alignment());
 
   // Copy existing data to new buffer.
   if (data_ != nullptr) {
     memcpy(buffer, data_, size_ * connector_->size());
-    FreeMemory(data_);
+    MemFree(data_);
   }
 
   // Set new data buffer.
@@ -542,8 +557,8 @@ string Instance::ToString(Tensor *param) const {
   // Locate parameter in instance.
   char *p  = data_ + param->offset();
   if (param->ref()) {
-    if (p == nullptr) return "null";
     p = *reinterpret_cast<char **>(p);
+    if (p == nullptr) return "null";
   }
   if (param->shape().partial()) return "*";
 
@@ -656,12 +671,19 @@ bool Step::NeedsSynchronization() {
   return false;
 }
 
+char *Step::AllocateKernelMemory(size_t size, int alignment) {
+  CHECK(kernel_memory_ == nullptr);
+  CHECK(cell_ != nullptr);
+  kernel_memory_ = cell_->network()->AllocateMemory(size, alignment);
+  return kernel_memory_;
+}
+
 Network::Network() {
   runtime_ = &default_runtime;
 }
 
 Network::~Network() {
-  for (auto *m : memory_) FreeMemory(m);
+  for (auto *m : memory_) MemFree(m);
   for (auto *t : parameters_) delete t;
   for (auto *t : constants_) {
     if (t->shared() == nullptr) {
@@ -679,6 +701,12 @@ Network::~Network() {
 Tensor *Network::GetParameter(const string &name) const {
   auto f = names_.find(name);
   return f == names_.end() ? nullptr : f->second;
+}
+
+char *Network::AllocateMemory(size_t size, int alignment) {
+  char *data = MemAlloc(size, alignment);
+  memory_.push_back(data);
+  return data;
 }
 
 static bool CompareUsage(const std::pair<int, Tensor *> &a,
@@ -925,18 +953,6 @@ bool Network::Compile(const Flow &flow, const Library &library) {
     step->kernel_->Adjust(step);
   }
 
-  // Propagate alignment for shared tensors.
-  for (auto it : tensors) {
-    Tensor *tensor = it.second;
-    Tensor *next = tensor->shared_;
-    while (next != nullptr) {
-      if (next->byte_alignment_ < tensor->byte_alignment_) {
-        next->byte_alignment_ = tensor->byte_alignment_;
-      }
-      next = next->shared_;
-    }
-  }
-
   // Propagate alignment between linked tensors.
   bool again = true;
   while (again) {
@@ -1080,6 +1096,21 @@ bool Network::Compile(const Flow &flow, const Library &library) {
             << " stride " << tensor->stride_.ToString()
             << " order " << tensor->order_
             << " on " << placename[tensor->placement_];
+  }
+
+  // Propagate size and alignment for shared tensors.
+  for (auto it : tensors) {
+    Tensor *tensor = it.second;
+    Tensor *next = tensor->shared_;
+    while (next != nullptr) {
+      if (next->size_ < tensor->size_) {
+        next->size_ = tensor->size_;
+      }
+      if (next->byte_alignment_ < tensor->byte_alignment_) {
+        next->byte_alignment_ = tensor->byte_alignment_;
+      }
+      next = next->shared_;
+    }
   }
 
   // Compute size and alignment for connectors.
@@ -1479,11 +1510,11 @@ void Network::ComputeLiveRanges() {
     Step *step = steps_[i];
     for (Tensor *input : step->inputs_) {
       if (input->first_ == -1) input->first_ = i;
-      if (!input->in_ && !input->out_) input->last_ = i;
+      if (!input->out_) input->last_ = i;
     }
     for (Tensor *output : step->outputs_) {
       if (output->first_ == -1) output->first_ = i;
-      if (!output->in_ && !output->out_) output->last_ = i;
+      if (!output->out_) output->last_ = i;
     }
   }
 
@@ -1506,7 +1537,6 @@ char *Network::AllocateTensor(Tensor *tensor) {
 
   // Allocate memory for tensor.
   char *data = AllocateMemory(tensor->size_, alignment);
-  memory_.push_back(data);
   memset(data, 0, tensor->size_);
 
   // Copy data.
@@ -1516,7 +1546,7 @@ char *Network::AllocateTensor(Tensor *tensor) {
     memcpy(data, tensor->data_, tensor->size_);
   } else if (tensor->rank() == 2) {
     // Copy matrix one element at a time.
-    char *src = tensor->data_;
+    const char *src = tensor->data_;
     int element_size = tensor->element_size();
     for (int r = 0; r < tensor->dim(0); ++r) {
       for (int c = 0; c < tensor->dim(1); ++c) {
@@ -1525,7 +1555,7 @@ char *Network::AllocateTensor(Tensor *tensor) {
       }
     }
   } else if (tensor->rank() == 3) {
-    char *src = tensor->data_;
+    const char *src = tensor->data_;
     int element_size = tensor->element_size();
     for (int r = 0; r < tensor->dim(0); ++r) {
       for (int c = 0; c < tensor->dim(1); ++c) {
@@ -1536,7 +1566,7 @@ char *Network::AllocateTensor(Tensor *tensor) {
       }
     }
   } else if (tensor->rank() == 4) {
-    char *src = tensor->data_;
+    const char *src = tensor->data_;
     int element_size = tensor->element_size();
     for (int r = 0; r < tensor->dim(0); ++r) {
       for (int c = 0; c < tensor->dim(1); ++c) {
