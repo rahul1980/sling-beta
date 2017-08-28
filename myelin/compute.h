@@ -308,7 +308,7 @@ class Tensor {
   int elements() const { return shape_.elements(); }
 
   // Value for constant tensor. Return null for parameters.
-  char *data() const { return data_; }
+  const char *data() const { return data_; }
 
   // Pointer to constant tensor on device.
   DevicePtr device_data() const { return device_data_; }
@@ -361,6 +361,12 @@ class Tensor {
     return data_ != nullptr || device_data_ != DEVICE_NULL;
   }
 
+  // Local variables are allocated in the instance block.
+  bool IsGlobal() const {
+    return data_ != nullptr || device_data_ != DEVICE_NULL;
+  }
+  bool IsLocal() const { return !IsGlobal(); }
+
   // Return tensor placement.
   Placement placement() const { return placement_; }
 
@@ -379,7 +385,9 @@ class Tensor {
   int ConsumerTask() const;
 
   // Return scalar value.
-  template<typename T> T value() const { return *reinterpret_cast<T *>(data_); }
+  template<typename T> const T value() const {
+    return *reinterpret_cast<const T *>(data_);
+  }
 
   // Element order.
   Order order() const { return order_; }
@@ -412,6 +420,13 @@ class Tensor {
   // Input and output flags.
   bool in() const { return in_; }
   bool out() const { return out_; }
+
+  // Live range for tensor.
+  int first() const { return first_; }
+  int last() const { return last_; }
+
+  // Byte alignment.
+  int byte_alignment() const { return byte_alignment_; }
 
   // Return tensor type as string.
   string TypeString() const;
@@ -467,7 +482,7 @@ class Tensor {
   Tensor *link_ = nullptr;
 
   // Value for constant tensor (not owned).
-  char *data_ = nullptr;
+  const char *data_ = nullptr;
 
   // Pointer to constant tensor data on device. This is only set for constant
   // tensors that need to be access from the device.
@@ -565,6 +580,10 @@ class Step {
   // Return the complexity of the cell, i.e. number of numeric operations.
   int64 complexity() const { return noop_ ? 0 : kernel_->Complexity(this); }
 
+  // Allocate auxiliary memory for kernel.
+  char *AllocateKernelMemory(size_t size, int alignment);
+  char *kernel_memory() const { return kernel_memory_; }
+
   // Cell that this step belongs to.
   Cell *cell() const { return cell_; }
 
@@ -615,6 +634,10 @@ class Step {
 
   // Kernel used for generating code for step (owned by library).
   Kernel *kernel_ = nullptr;
+
+  // Auxiliary memory for kernel. This memory is owned by the memory pool for
+  // the network.
+  char *kernel_memory_ = nullptr;
 
   // Kernel variant. Only used for display purposes.
   string variant_;
@@ -795,36 +818,49 @@ class Instance {
   // Get raw pointer to location of parameter in instance memory.
   char *GetAddress(Tensor *param) {
     DCHECK(param != nullptr);
-    DCHECK(!param->IsConstant());
+    DCHECK(!param->IsConstant()) << param->name();
     return data_ + param->offset();
   }
 
   // Get pointer to location of parameter in instance memory.
   template<typename T> T *Get(Tensor *param) {
     DCHECK(param != nullptr);
-    DCHECK(!param->IsConstant());
-    DCHECK_EQ(Traits<T>().type(), param->type());
+    DCHECK(!param->IsConstant()) << param->name();
+    DCHECK(!param->ref()) << param->name();
+    DCHECK_EQ(Traits<T>().type(), param->type()) << param->name();
     return reinterpret_cast<T *>(data_ + param->offset());
   }
 
   // Get pointer to location of element of parameter in instance memory.
   template<typename T> T *Get(Tensor *param, int r) {
     DCHECK(param != nullptr);
-    DCHECK(!param->IsConstant());
-    DCHECK_EQ(Traits<T>().type(), param->type());
+    DCHECK(!param->IsConstant()) << param->name();
+    DCHECK(!param->ref()) << param->name();
+    DCHECK_EQ(Traits<T>().type(), param->type()) << param->name();
     return reinterpret_cast<T *>(data_ + param->offset() + param->offset(r));
   }
   template<typename T> T *Get(Tensor *param, int r, int c) {
     DCHECK(param != nullptr);
-    DCHECK(!param->IsConstant());
-    DCHECK_EQ(Traits<T>().type(), param->type());
+    DCHECK(!param->IsConstant()) << param->name();
+    DCHECK(!param->ref()) << param->name();
+    DCHECK_EQ(Traits<T>().type(), param->type()) << param->name();
     return reinterpret_cast<T *>(
         data_ + param->offset() + param->offset(r, c));
   }
 
   // Set link to element in connector channel.
   void Set(Tensor *param, Channel *channel, int index = 0) {
+    DCHECK(param->ref()) << param->name();
     *reinterpret_cast<char **>(data_ + param->offset()) = channel->at(index);
+  }
+
+  // Sets a reference parameter to an address.  Caller is responsible for
+  // ensuring proper alignment and any other constraints.
+  void SetReference(Tensor *param, char *address) {
+    DCHECK(param != nullptr);
+    DCHECK(!param->IsConstant()) << param->name();
+    DCHECK(param->ref()) << param->name();
+    *reinterpret_cast<char **>(data_ + param->offset()) = address;
   }
 
   // Return tensor data object for parameter in instance.
@@ -993,6 +1029,9 @@ class Network {
   // Get parameter.
   Tensor *GetParameter(const string &name) const;
 
+  // Allocate memory in memory pool.
+  char *AllocateMemory(size_t size, int alignment);
+
   // Runtime support functions.
   Runtime *runtime() const { return runtime_; }
   void set_runtime(Runtime *runtime) { runtime_ = runtime; }
@@ -1020,6 +1059,9 @@ class Network {
 
   // Network parameters.
   const std::vector<Tensor *> parameters() const { return parameters_; }
+
+  // Network steps.
+  const std::vector<Step *> &steps() const { return steps_; }
 
  private:
   // Compute live ranges for all the variables.

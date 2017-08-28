@@ -31,10 +31,11 @@ namespace myelin {
 // computations as a sequence of operations on variables. The following kinds of
 // variables are supported:
 //
-//   %n: input variable
+//   %n: memory-based input variable
 //   #n: constant variable
-//   @n: output variable
-//   $n: temporary variable
+//   !n: register-based input variable
+//   @n: memory-based output variable
+//   $n: temporary register variable
 //   _n: number
 //
 // An Express recipe is a text format for representing computations over
@@ -47,10 +48,11 @@ namespace myelin {
 //   <operation> := <name> '(' <arg list> ')'
 //   <arg list> := <arg> | <arg> ',' <arg list>
 //   <arg> := <variable> | <expression>
-//   <variable> := <input variable> | <constant> |
+//   <variable> := <input variable> | <constant> | <register>
 //                 <output variable> | <temp variable> | <number>
 //   <input variable> := '%' <integer>
 //   <constant> := '#' <integer>
+//   <register> := '!' <integer>
 //   <output variable> := '@' <integer>
 //   <temp variable> := '$' <integer>
 //   <number> := '_' <integer>
@@ -61,7 +63,7 @@ class Express {
   struct Op;
 
   // Variable type.
-  enum VarType {INPUT, CONST, OUTPUT, TEMP, NUMBER};
+  enum VarType {INPUT, REGISTER, CONST, OUTPUT, TEMP, NUMBER};
 
   // Operation type.
   enum OpType {
@@ -115,7 +117,7 @@ class Express {
   // System-defined numeric constants.
   enum ConstantNumber {
     ZERO, ONE, HALF, P9, N9, P127, NLN2,
-    MIN_NORM_POS, INV_MANT_MASK, INT127,
+    MIN_NORM_POS, INV_MANT_MASK, MAX_MANT,
     CEPHES_SQRTHF,
     CEPHES_LOG_P0, CEPHES_LOG_P1, CEPHES_LOG_P2, CEPHES_LOG_P3, CEPHES_LOG_P4,
     CEPHES_LOG_P5, CEPHES_LOG_P6, CEPHES_LOG_P7, CEPHES_LOG_P8,
@@ -148,6 +150,9 @@ class Express {
     // Redirect all consumers of variable to another variable.
     void Redirect(Var *other);
 
+    // Temporary variables and register-based inputs are in registers.
+    bool IsRegister() const { return type == TEMP || type == REGISTER; }
+
     VarType type;                 // variable type
     int id;                       // variable id (-1 for unassigned temps)
     Op *producer;                 // operation producing value for variable
@@ -156,6 +161,7 @@ class Express {
     // Live range for variable.
     Op *first = nullptr;          // first usage of variable
     Op *last = nullptr;           // last usage of variable
+    int reg = -1;                 // register number for variable
   };
 
   // Operation in expression.
@@ -209,6 +215,7 @@ class Express {
     bool mov_reg_imm = false;       // dst = imm
     bool mov_reg_mem = false;       // dst = [mem]
     bool mov_mem_reg = false;       // [mem] = src
+    bool mov_mem_imm = false;       // [mem] = imm
 
     // Two-operand instruction formats.
     bool op_reg_reg = false;        // dst = op(dst, src)
@@ -221,7 +228,7 @@ class Express {
     bool op_reg_reg_reg = false;    // dst = op(src1, src2)
     bool op_reg_reg_imm = false;    // dst = op(src, imm)
     bool op_reg_reg_mem = false;    // dst = op(src, [mem])
-    bool op_mem_reg_reg = false;    // [mem} = op(src, src2)
+    bool op_mem_reg_reg = false;    // [mem] = op(src, src2)
 
     // Unary function instruction formats.
     bool func_reg_reg = false;      // dst = op(src)
@@ -255,18 +262,15 @@ class Express {
   Op *OperationBefore(Op *pos, OpType type);
   Op *OperationAfter(Op *pos, OpType type);
 
-  // Add function with with optional intrinsics expansion. The result variable
-  // is not set for the returned op.
+  // Add function with optional intrinsics expansion. The result variable is not
+  // set for the returned op.
   Op *Function(OpType type, std::vector<Var *> &args, bool expand = false);
 
-  // Add new variable to expression.
+  // Lookup variable in expression or add a new variable if it does not exist.
   Var *Variable(VarType type, int id);
 
-  // Look up variable. Return null if variable does not exist.
-  Var *LookupVariable(VarType type, int id);
-
   // Add new temp variable to expression.
-  Var *NewTemp() { return Variable(TEMP, -1); }
+  Var *Temp() { return Variable(TEMP, -1); }
 
   // Add new number variable.
   Var *Number(ConstantNumber number);
@@ -289,7 +293,7 @@ class Express {
   // Cache constants and move the loads outside the body of the code. Each
   // cached constant takes up an additional register, so the number of cached
   // constants is limited to the number of spare registers.
-  void CacheConstants(int limit);
+  void HoistConstants(int limit);
 
   // Cache inputs and results used in multiple ops in temporary variables.
   void CacheResults();
@@ -314,8 +318,8 @@ class Express {
   void FuseMulAdd() { Fuse(ADD, MUL, MULADD213, MULADD231); }
   void FuseMulSub() { Fuse(SUB, MUL, MULSUB213, INVALID); }
 
-  // Rewrite expression to match instruction forms supported by target
-  // architecture. The expression is assumed to be on static single assignment
+  // Rewrite expression to match instruction formats supported by target
+  // architecture. The expression is assumed to be in static single assignment
   // form. The expression is rewritten by adding additional temporary variables
   // to the rewritten expression so only the supported instruction form are
   // needed for evaluating the expression.
@@ -345,14 +349,14 @@ class Express {
   Var *Do(OpType type, Var *x) {
     Op *op = Operation(type);
     op->AddArgument(x);
-    op->Assign(NewTemp());
+    op->Assign(Temp());
     return op->result;
   }
   Var *Do(OpType type, Var *x, Var *y) {
     Op *op = Operation(type);
     op->AddArgument(x);
     op->AddArgument(y);
-    op->Assign(NewTemp());
+    op->Assign(Temp());
     return op->result;
   }
   Var *Do(OpType type, Var *x, Var *y, Var *z) {
@@ -360,7 +364,7 @@ class Express {
     op->AddArgument(x);
     op->AddArgument(y);
     op->AddArgument(z);
-    op->Assign(NewTemp());
+    op->Assign(Temp());
     return op->result;
   }
 
@@ -399,7 +403,7 @@ class Express {
 
   // Return value for system-defined numeric constant.
   static float NumericFlt32(int number) { return constants[number].flt; }
-  static float NumericFlt64(int number) { return constants[number].dbl; }
+  static double NumericFlt64(int number) { return constants[number].dbl; }
 
  private:
   // Try to eliminate identical operations from expression. Return true if any
@@ -424,7 +428,8 @@ class Express {
   // Operations in expression.
   std::vector<Op *> ops_;
 
-  // First operation in the body. All instructions before are loop invariant.
+  // First operation in the body. All instructions before are loop invariant. If
+  // body is 0 (the default), there are no loop invariant instructions.
   int body_ = 0;
 
   // System-defined numeric constants.
