@@ -304,7 +304,7 @@ void OutputMasterSpec(Artifacts *artifacts) {
   AddFixedFeature(lr_lstm, "words", "word", FLAGS_word_embeddings_dim);
 
   if (FLAGS_oov_lstm_features) {
-    //AddFixedFeature(lr_lstm, "suffix", "suffix(length=3)", 16);
+    AddFixedFeature(lr_lstm, "suffix", "suffix(length=3)", 16);
     AddFixedFeature(
         lr_lstm, "shape",
         "digit hyphen punctuation quote capitalization", 8);
