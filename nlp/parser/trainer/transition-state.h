@@ -160,6 +160,14 @@ class SemparState
     return shift_only() ? shift_only_state_.steps_taken : step_info_.NumSteps();
   }
 
+  void IncrementSteps() {
+    if (shift_only()) {
+      ++shift_only_state_.steps_taken;
+    } else {
+      ++step_info_.steps;
+    }
+  }
+
   // Current position (works for both SHIFT_ONLY and SEMPAR cases).
   int current() const {
     if (!shift_only()) return parser_state()->current();

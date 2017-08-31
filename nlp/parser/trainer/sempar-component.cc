@@ -238,7 +238,10 @@ void SemparComponent::AdvanceFromPrediction(const float scores[],
 
 void SemparComponent::AdvanceFromOracle() {
   for (SemparState *state : batch_) {
-    if (state->IsFinal()) continue;
+    if (state->IsFinal()) {
+      state->IncrementSteps();
+      continue;
+    }
     Advance(state, GetOracleLabel(state));
     state->SetScore(0.0f);
     state->SetBeamIndex(0);
@@ -276,7 +279,7 @@ int SemparComponent::GetFixedFeatures(
 
     for (int i = old_size; i < args.output.size(); ++i) {
       if ((i == old_size) ||
-          (args.output[i].feature_index < args.output[i - 1].feature_index)) {
+          (args.output[i].feature_index != args.output[i - 1].feature_index)) {
         next_segment_index++;
       }
       segment_indices.emplace_back(next_segment_index);
