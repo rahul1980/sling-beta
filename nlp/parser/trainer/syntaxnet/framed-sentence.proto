@@ -1,0 +1,11 @@
+syntax = "proto2";
+
+import "third_party/syntaxnet/syntaxnet/sentence.proto";
+
+package sling.nlp;
+
+message FramedSentence {
+  extend syntaxnet.Sentence {
+    optional bytes framing = 31416;
+  }
+}

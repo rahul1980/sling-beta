@@ -69,7 +69,9 @@ cc_library(
     "//frame:object",
     "//frame:serialization",
     "//frame:store",
+    "//nlp/parser/trainer/syntaxnet:framed-sentence",
     "//string",
+    "//third_party/syntaxnet",
     "//util:zip-iterator",
   ],
 )

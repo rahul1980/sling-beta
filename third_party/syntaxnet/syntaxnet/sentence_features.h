@@ -661,7 +661,7 @@ typedef FeatureExtractor<Sentence, int> SentenceExtractor;
 
 // Utility to register the sentence_instance::Feature functions.
 #define REGISTER_SENTENCE_IDX_FEATURE(name, type) \
-  REGISTER_SYNTAXNET_FEATURE_FUNCTION(SentenceFeature, name, type)
+  REGISTER_SYNTAXNET_FEATURE_FUNCTION(syntaxnet::SentenceFeature, name, type)
 
 }  // namespace syntaxnet
 
