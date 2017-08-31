@@ -33,6 +33,10 @@ using syntaxnet::ProtoRecordWriter;
 using syntaxnet::VectorIntWorkspace;
 using syntaxnet::dragnn::ComponentSpec;
 
+static constexpr char kUnknown[] = "<UNKNOWN>";
+static constexpr char kOutside[] = "<OUTSIDE>";
+static constexpr char kRoot[] = "<ROOT>";
+
 class PrecomputedFeature : public SemparFeature {
  public:
    void RequestWorkspaces(syntaxnet::WorkspaceRegistry *registry) override {
@@ -54,17 +58,20 @@ class PrecomputedFeature : public SemparFeature {
 
   void Extract(Args *args) override {
     int index = args->state->current() + argument();
-    if (index < 0 || index >= args->state->end()) {
-      ExtractInvalid(args, index);
-      return;
+    if (index == -1) {
+      args->Output(RootValue());
+    } else if (index < 0 || index >= args->state->end()) {
+      args->Output(OutsideValue());
+    } else {
+      int64 id = args->workspaces()->Get<VectorIntWorkspace>(
+          workspace_id_).element(index);
+      if (id != -1) args->Output(id);
     }
-    int64 id = args->workspaces()->Get<VectorIntWorkspace>(
-        workspace_id_).element(index);
-    args->Output(id);
   }
 
  protected:
-  virtual void ExtractInvalid(Args *args, int index) {}
+  virtual int64 RootValue() const = 0;
+  virtual int64 OutsideValue() const = 0;
 
   virtual int64 Get(int index, const string &word) = 0;
 
@@ -116,8 +123,6 @@ class WordFeature : public PrecomputedFeature {
       if (word.empty() || HasSpaces(word)) continue;
       if (allowed_.empty() || allowed_.count(word) > 0) {
         Add(word);
-      } else if (!allowed_.empty()) {
-        saw_oov_during_training_ = true;
       }
     }
   }
@@ -129,16 +134,15 @@ class WordFeature : public PrecomputedFeature {
       StrAppend(&contents, !contents.empty() ? "\n" : "", w);
     }
 
-    // Add an unknown word to the vocabulary, if required.
-    if (saw_oov_during_training_) {
-      StrAppend(&contents, !contents.empty() ? "\n" : "", kUnknown);
-    }
+    // Add special words to the vocabulary, if required.
+    if (!contents.empty()) StrAppend(&contents, "\n");
+    StrAppend(&contents, kUnknown, "\n", kOutside, "\n", kRoot);
     CHECK(File::WriteContents(vocabulary_file_, contents));
 
     // Add path to the vocabulary to the spec.
     AddResourceToSpec("word-vocab", vocabulary_file_, spec);
 
-    return id_to_word_.size() + (saw_oov_during_training_ ? 1 : 0);
+    return id_to_word_.size() + 3;
   }
 
   void Init(const ComponentSpec &spec, SharedResources *resources) override {
@@ -146,17 +150,44 @@ class WordFeature : public PrecomputedFeature {
     CHECK(!file.empty()) << spec.DebugString();
     FileInput input(file);
     string word;
+    int64 count = 0;
     while (input.ReadLine(&word)) {
       if (!word.empty() && word.back() == '\n') word.pop_back();
-      Add(word);
-      if (word == kUnknown) oov_ = id_to_word_.size() - 1;
+      if (word == kUnknown) {
+        oov_ = count;
+      } else if (word == kOutside) {
+        outside_ = count;
+      } else if (word == kRoot) {
+        root_ = count;
+      } else {
+        Add(word);
+      }
+      count++;
     }
+    CHECK_NE(oov_, -1);
+    CHECK_NE(outside_, -1);
+    CHECK_NE(root_, -1);
     LOG(INFO) << "WordFeature: " << id_to_word_.size() << " words read, "
-              << " OOV feature id: " << oov_;
+              << " OOV feature id: " << oov_ << ", outside: " << outside_
+              << ", root: " << root_;
   }
 
   string FeatureToString(int64 id) const override {
+    if (id == oov_) return kUnknown;
+    if (id == outside_) return kOutside;
+    if (id == root_) return kRoot;
     return id_to_word_.at(id);
+  }
+
+ protected:
+  int64 OutsideValue() const override { return outside_; }
+  int64 RootValue() const override { return root_; }
+
+  int64 Get(int index, const string &word) override {
+    string s = word;
+    syntaxnet::utils::NormalizeDigits(&s);
+    const auto &it = words_.find(s);
+    return it == words_.end() ? oov_ : it->second;
   }
 
  private:
@@ -170,18 +201,10 @@ class WordFeature : public PrecomputedFeature {
     }
   }
 
-  virtual int64 Get(int index, const string &word) {
-    string s = word;
-    syntaxnet::utils::NormalizeDigits(&s);
-    const auto &it = words_.find(s);
-    return it == words_.end() ? oov_ : it->second;
-  }
-
-  // Unknown word.
-  static constexpr char kUnknown[] = "<UNKNOWN>";
-
-  // Id of the unknown word.
+  // Special ids.
   int64 oov_ = -1;
+  int64 outside_ = -1;
+  int64 root_ = -1;
 
   // Path of vocabulary under construction.
   string vocabulary_file_;
@@ -192,15 +215,10 @@ class WordFeature : public PrecomputedFeature {
   // Id -> Word.
   std::vector<string> id_to_word_;
 
-  // Whether we saw OOV words during training.
-  bool saw_oov_during_training_ = false;
-
   // Set of allowed words. Anything outside is consider OOV.
   // If empty, then all words are allowed.
   std::unordered_set<string> allowed_;
 };
-
-constexpr char WordFeature::kUnknown[];
 
 REGISTER_SEMPAR_FEATURE("word", WordFeature);
 
@@ -237,7 +255,7 @@ class PrefixFeature : public PrecomputedFeature {
     // Add path to the vocabulary to the spec.
     AddResourceToSpec(VocabularyName(), vocabulary_file_, spec);
 
-    return affixes_->size() + 1;  // +1 for OOV
+    return affixes_->size() + 3;
   }
 
   void Init(const ComponentSpec &spec, SharedResources *resources) override {
@@ -252,10 +270,16 @@ class PrefixFeature : public PrecomputedFeature {
   }
 
   string FeatureToString(int64 id) const override {
-    return (id == oov_) ? kUnknown : affixes_->AffixForm(id);
+    if (id == oov_) return kUnknown;
+    if (id == OutsideValue()) return kOutside;
+    if (id == RootValue()) return kRoot;
+    return affixes_->AffixForm(id);
   }
 
  protected:
+  int64 OutsideValue() const override { return oov_ + 1; }
+  int64 RootValue() const override { return oov_ + 2; }
+
   virtual AffixTable::Type AffixType() const {
     return AffixTable::PREFIX;
   }
@@ -281,10 +305,7 @@ class PrefixFeature : public PrecomputedFeature {
   int length_ = 0;
   int oov_ = -1;
   string vocabulary_file_;
-  static constexpr char kUnknown[] = "<UNKNOWN_AFFIX>";
 };
-
-constexpr char PrefixFeature::kUnknown[];
 
 REGISTER_SEMPAR_FEATURE("prefix", PrefixFeature);
 
@@ -335,9 +356,8 @@ class HyphenFeature : public PrecomputedFeature {
   }
 
  protected:
-  virtual void ExtractInvalid(Args *args, int index) {
-    args->Output(index == -1 ? CARDINALITY + 1 : CARDINALITY);
-  }
+  int64 OutsideValue() const override { return CARDINALITY; }
+  int64 RootValue() const override { return CARDINALITY + 1; }
 
   int64 Get(int index, const string &word) override {
     return (word.find('-') != string::npos ? HAS_HYPHEN : NO_HYPHEN);
@@ -379,9 +399,8 @@ class CapitalizationFeature : public PrecomputedFeature {
   }
 
  protected:
-  virtual void ExtractInvalid(Args *args, int index) {
-    args->Output(index == -1 ? CARDINALITY + 1 : CARDINALITY);
-  }
+  int64 OutsideValue() const override { return CARDINALITY; }
+  int64 RootValue() const override { return CARDINALITY + 1; }
 
   int64 Get(int index, const string &word) override {
     bool has_upper = false;
@@ -443,9 +462,8 @@ class PunctuationAmountFeature : public PrecomputedFeature {
   }
 
  protected:
-  virtual void ExtractInvalid(Args *args, int index) {
-    args->Output(index == -1 ? CARDINALITY + 1 : CARDINALITY);
-  }
+  int64 OutsideValue() const override { return CARDINALITY; }
+  int64 RootValue() const override { return CARDINALITY + 1; }
 
   int64 Get(int index, const string &word) override {
     bool has_punctuation = false;
@@ -526,9 +544,8 @@ class QuoteFeature : public PrecomputedFeature {
   }
 
  protected:
-  virtual void ExtractInvalid(Args *args, int index) {
-    args->Output(index == -1 ? CARDINALITY + 1 : CARDINALITY);
-  }
+  int64 OutsideValue() const override { return CARDINALITY; }
+  int64 RootValue() const override { return CARDINALITY + 1; }
 
   int64 Get(int index, const string &word) override {
     // Penn Treebank open and close quotes are multi-character.
@@ -575,9 +592,8 @@ class DigitFeature : public PrecomputedFeature {
   }
 
  protected:
-  virtual void ExtractInvalid(Args *args, int index) {
-    args->Output(index == -1 ? CARDINALITY + 1 : CARDINALITY);
-  }
+  int64 OutsideValue() const override { return CARDINALITY; }
+  int64 RootValue() const override { return CARDINALITY + 1; }
 
   int64 Get(int index, const string &word) override {
     bool has_digit = isdigit(word[0]);
