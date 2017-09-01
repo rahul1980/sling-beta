@@ -162,12 +162,6 @@ struct ComponentRegistry {
     Registrar *r = components;
     while (r != nullptr && strcmp(type, r->type()) != 0) r = r->next();
     if (r == nullptr) {
-      LOG(ERROR) << "Unknown " << name << " component: '" << type << "'.";
-      r = components;
-      while (r != nullptr && strcmp(type, r->type()) != 0) {
-        LOG(INFO) << "Registry has " << r->type();
-        r = r->next();
-      }
       LOG(FATAL) << "Unknown " << name << " component: '" << type << "'.";
     }
     return r;

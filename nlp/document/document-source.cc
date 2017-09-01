@@ -21,9 +21,6 @@
 #include "file/file.h"
 #include "frame/object.h"
 #include "frame/serialization.h"
-#include "nlp/parser/trainer/syntaxnet/framed-sentence.pb.h"
-#include "syntaxnet/proto_io.h"
-#include "syntaxnet/sentence.pb.h"
 #include "util/zip-iterator.h"
 
 namespace sling {
@@ -82,46 +79,6 @@ class ZipDocumentSource : public DocumentSource {
   string file_;
 };
 
-// Iterator for TFSentenceRecord files.
-class TFSentenceRecordSource : public DocumentSource {
- public:
-  TFSentenceRecordSource(const string &file) {
-    reader_ = new syntaxnet::ProtoRecordReader(file);
-    file_ = file;
-  }
-
-  ~TFSentenceRecordSource() override { delete reader_; }
-
-  bool NextSerialized(string *name, string *serialized) override {
-    LOG(FATAL) << "Not implemented";
-    return false;
-  }
-
-  Document *Next(Store *store) override {
-    syntaxnet::Sentence sentence;
-    auto status = reader_->Read(&sentence);
-    if (!status.ok()) return nullptr;
-
-    Frame frame =
-        Decode(store, sentence.GetExtension(FramedSentence::framing)).AsFrame();
-    CHECK(frame.valid());
-    Document *doc = new Document(frame);
-    doc->Update();
-
-    return doc;
-  }
-
-  void Rewind() override {
-    delete reader_;
-    reader_ = new syntaxnet::ProtoRecordReader(file_);
-  }
-
- public:
-  string file_;
-  syntaxnet::ProtoRecordReader *reader_ = nullptr;
-};
-
-
 Document *DocumentSource::Next(Store *store) {
   string name, contents;
   if (!NextSerialized(&name, &contents)) return nullptr;
@@ -143,8 +100,6 @@ DocumentSource *DocumentSource::Create(const string &file_pattern) {
   // TODO: Add more formats as needed.
   if (HasSuffix(file_pattern, ".zip")) {
     return new ZipDocumentSource(file_pattern);
-  } else if (HasSuffix(file_pattern, ".tfrecordio")) {
-    return new TFSentenceRecordSource(file_pattern);
   } else {
     std::vector<string> files;
     CHECK(File::Match(file_pattern, &files));
