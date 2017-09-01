@@ -34,8 +34,6 @@ using syntaxnet::VectorIntWorkspace;
 using syntaxnet::dragnn::ComponentSpec;
 
 static constexpr char kUnknown[] = "<UNKNOWN>";
-static constexpr char kOutside[] = "<OUTSIDE>";
-static constexpr char kRoot[] = "<ROOT>";
 
 class PrecomputedFeature : public SemparFeature {
  public:
@@ -58,21 +56,15 @@ class PrecomputedFeature : public SemparFeature {
 
   void Extract(Args *args) override {
     int index = args->state->current() + argument();
-    if (index == -1) {
-      args->Output(RootValue());
-    } else if (index < 0 || index >= args->state->end()) {
-      args->Output(OutsideValue());
-    } else {
+    int begin = args->state->begin();
+    if (index >= begin && index < args->state->end()) {
       int64 id = args->workspaces()->Get<VectorIntWorkspace>(
-          workspace_id_).element(index);
+          workspace_id_).element(index + begin);
       if (id != -1) args->Output(id);
     }
   }
 
  protected:
-  virtual int64 RootValue() const = 0;
-  virtual int64 OutsideValue() const = 0;
-
   virtual int64 Get(int index, const string &word) = 0;
 
   // Workspace index.
@@ -96,22 +88,6 @@ class WordFeature : public PrecomputedFeature {
   void TrainInit(SharedResources *resources,
                  const ComponentSpec &spec,
                  const string &output_folder) override {
-    string allowed_words_file = GetResource(spec, "allowed-words");
-    if (!allowed_words_file.empty()) {
-      string contents;
-      CHECK(File::ReadContents(allowed_words_file, &contents));
-      if (contents.back() == '\n') contents.pop_back();
-      int start = 0;
-      for (size_t i = 0; i <= contents.size(); ++i) {
-        if ((i == contents.size()) || (contents[i] == '\n')) {
-          allowed_.insert(string(contents.data() + start, i - start));
-          start = i + 1;
-        }
-      }
-      LOG(INFO) << spec.name() << ": Read " << allowed_.size()
-                << " allowed words from " << allowed_words_file;
-    }
-
     vocabulary_file_ = StrCat(output_folder, "/", spec.name(), "-word-vocab");
   }
 
@@ -121,9 +97,7 @@ class WordFeature : public PrecomputedFeature {
       string word = token.text();
       syntaxnet::utils::NormalizeDigits(&word);
       if (word.empty() || HasSpaces(word)) continue;
-      if (allowed_.empty() || allowed_.count(word) > 0) {
-        Add(word);
-      }
+      Add(word);
     }
   }
 
@@ -134,15 +108,15 @@ class WordFeature : public PrecomputedFeature {
       StrAppend(&contents, !contents.empty() ? "\n" : "", w);
     }
 
-    // Add special words to the vocabulary, if required.
+    // Add kUnknown to the vocabulary.
     if (!contents.empty()) StrAppend(&contents, "\n");
-    StrAppend(&contents, kUnknown, "\n", kOutside, "\n", kRoot);
+    StrAppend(&contents, kUnknown);
     CHECK(File::WriteContents(vocabulary_file_, contents));
 
     // Add path to the vocabulary to the spec.
     AddResourceToSpec("word-vocab", vocabulary_file_, spec);
 
-    return id_to_word_.size() + 3;
+    return id_to_word_.size() + 1;  // +1 for kUnknown
   }
 
   void Init(const ComponentSpec &spec, SharedResources *resources) override {
@@ -155,34 +129,21 @@ class WordFeature : public PrecomputedFeature {
       if (!word.empty() && word.back() == '\n') word.pop_back();
       if (word == kUnknown) {
         oov_ = count;
-      } else if (word == kOutside) {
-        outside_ = count;
-      } else if (word == kRoot) {
-        root_ = count;
-      } else {
-        Add(word);
+        continue;
       }
+      Add(word);
       count++;
     }
-    CHECK_NE(oov_, -1);
-    CHECK_NE(outside_, -1);
-    CHECK_NE(root_, -1);
+    CHECK_NE(oov_, -1) << kUnknown << " not in " << file;
     LOG(INFO) << "WordFeature: " << id_to_word_.size() << " words read, "
-              << " OOV feature id: " << oov_ << ", outside: " << outside_
-              << ", root: " << root_;
+              << " OOV feature id: " << oov_;
   }
 
   string FeatureToString(int64 id) const override {
-    if (id == oov_) return kUnknown;
-    if (id == outside_) return kOutside;
-    if (id == root_) return kRoot;
-    return id_to_word_.at(id);
+    return (id == oov_) ? kUnknown : id_to_word_.at(id);
   }
 
  protected:
-  int64 OutsideValue() const override { return outside_; }
-  int64 RootValue() const override { return root_; }
-
   int64 Get(int index, const string &word) override {
     string s = word;
     syntaxnet::utils::NormalizeDigits(&s);
@@ -201,10 +162,8 @@ class WordFeature : public PrecomputedFeature {
     }
   }
 
-  // Special ids.
+  // Unknown word id.
   int64 oov_ = -1;
-  int64 outside_ = -1;
-  int64 root_ = -1;
 
   // Path of vocabulary under construction.
   string vocabulary_file_;
@@ -214,10 +173,6 @@ class WordFeature : public PrecomputedFeature {
 
   // Id -> Word.
   std::vector<string> id_to_word_;
-
-  // Set of allowed words. Anything outside is consider OOV.
-  // If empty, then all words are allowed.
-  std::unordered_set<string> allowed_;
 };
 
 REGISTER_SEMPAR_FEATURE("word", WordFeature);
@@ -255,7 +210,7 @@ class PrefixFeature : public PrecomputedFeature {
     // Add path to the vocabulary to the spec.
     AddResourceToSpec(VocabularyName(), vocabulary_file_, spec);
 
-    return affixes_->size() + 3;
+    return affixes_->size() + 1;  // +1 for kUnknown
   }
 
   void Init(const ComponentSpec &spec, SharedResources *resources) override {
@@ -270,16 +225,10 @@ class PrefixFeature : public PrecomputedFeature {
   }
 
   string FeatureToString(int64 id) const override {
-    if (id == oov_) return kUnknown;
-    if (id == OutsideValue()) return kOutside;
-    if (id == RootValue()) return kRoot;
-    return affixes_->AffixForm(id);
+    return (id == oov_) ? kUnknown : affixes_->AffixForm(id);
   }
 
  protected:
-  int64 OutsideValue() const override { return oov_ + 1; }
-  int64 RootValue() const override { return oov_ + 2; }
-
   virtual AffixTable::Type AffixType() const {
     return AffixTable::PREFIX;
   }
@@ -346,7 +295,7 @@ class HyphenFeature : public PrecomputedFeature {
 
   // Returns the final domain size of the feature.
   int TrainFinish(syntaxnet::dragnn::ComponentSpec *spec) override {
-    return CARDINALITY + 2;  // including OUTSIDE and ROOT
+    return CARDINALITY;
   }
 
   string FeatureToString(int64 id) const override {
@@ -356,9 +305,6 @@ class HyphenFeature : public PrecomputedFeature {
   }
 
  protected:
-  int64 OutsideValue() const override { return CARDINALITY; }
-  int64 RootValue() const override { return CARDINALITY + 1; }
-
   int64 Get(int index, const string &word) override {
     return (word.find('-') != string::npos ? HAS_HYPHEN : NO_HYPHEN);
   }
@@ -382,7 +328,7 @@ class CapitalizationFeature : public PrecomputedFeature {
 
   // Returns the final domain size of the feature.
   int TrainFinish(syntaxnet::dragnn::ComponentSpec *spec) override {
-    return CARDINALITY + 2;  // including OUTSIDE and ROOT
+    return CARDINALITY;
   }
 
   // Returns a string representation of the enum value.
@@ -399,9 +345,6 @@ class CapitalizationFeature : public PrecomputedFeature {
   }
 
  protected:
-  int64 OutsideValue() const override { return CARDINALITY; }
-  int64 RootValue() const override { return CARDINALITY + 1; }
-
   int64 Get(int index, const string &word) override {
     bool has_upper = false;
     bool has_lower = false;
@@ -448,7 +391,7 @@ class PunctuationAmountFeature : public PrecomputedFeature {
 
   // Returns the final domain size of the feature.
   int TrainFinish(syntaxnet::dragnn::ComponentSpec *spec) override {
-    return CARDINALITY + 2;  // including OUTSIDE and ROOT
+    return CARDINALITY;
   }
 
   string FeatureToString(int64 id) const override {
@@ -462,9 +405,6 @@ class PunctuationAmountFeature : public PrecomputedFeature {
   }
 
  protected:
-  int64 OutsideValue() const override { return CARDINALITY; }
-  int64 RootValue() const override { return CARDINALITY + 1; }
-
   int64 Get(int index, const string &word) override {
     bool has_punctuation = false;
     bool all_punctuation = true;
@@ -503,7 +443,7 @@ class QuoteFeature : public PrecomputedFeature {
 
   // Returns the final domain size of the feature.
   int TrainFinish(syntaxnet::dragnn::ComponentSpec *spec) override {
-    return CARDINALITY + 2;
+    return CARDINALITY;
   }
 
   string FeatureToString(int64 id) const override {
@@ -544,9 +484,6 @@ class QuoteFeature : public PrecomputedFeature {
   }
 
  protected:
-  int64 OutsideValue() const override { return CARDINALITY; }
-  int64 RootValue() const override { return CARDINALITY + 1; }
-
   int64 Get(int index, const string &word) override {
     // Penn Treebank open and close quotes are multi-character.
     if (word == "``") return OPEN_QUOTE;
@@ -578,7 +515,7 @@ class DigitFeature : public PrecomputedFeature {
 
   // Returns the final domain size of the feature.
   int TrainFinish(syntaxnet::dragnn::ComponentSpec *spec) override {
-    return CARDINALITY + 2;
+    return CARDINALITY;
   }
 
   string FeatureToString(int64 id) const override {
@@ -592,9 +529,6 @@ class DigitFeature : public PrecomputedFeature {
   }
 
  protected:
-  int64 OutsideValue() const override { return CARDINALITY; }
-  int64 RootValue() const override { return CARDINALITY + 1; }
-
   int64 Get(int index, const string &word) override {
     bool has_digit = isdigit(word[0]);
     bool all_digit = has_digit;

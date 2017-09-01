@@ -160,24 +160,19 @@ class SemparState
     return shift_only() ? shift_only_state_.steps_taken : step_info_.NumSteps();
   }
 
-  void IncrementSteps() {
-    if (shift_only()) {
-      ++shift_only_state_.steps_taken;
-    } else {
-      ++step_info_.steps;
-    }
-  }
-
   // Current position (works for both SHIFT_ONLY and SEMPAR cases).
   int current() const {
-    if (!shift_only()) return parser_state()->current();
-    return shift_only_state_.left_to_right ? shift_only_state_.steps_taken :
-        (shift_only_state_.size - 1 - shift_only_state_.steps_taken);
+    return shift_only() ? shift_only_state_.current() :
+        parser_state()->current();
   }
 
-  // End position (works for both SHIFT_ONLY and SEMPAR cases).
+  // Begin/End position.
+  int begin() const {
+    return shift_only() ? shift_only_state_.begin : parser_state()->begin();
+  }
+
   int end() const {
-    return shift_only() ? shift_only_state_.size : parser_state()->end();
+    return shift_only() ? shift_only_state_.end : parser_state()->end();
   }
 
  private:
@@ -210,9 +205,16 @@ class SemparState
 
   // State information for shift-only cases.
   struct ShiftOnlyState {
+    int begin = 0;   // beginning token index
+    int end = 0;     // ending token index (exclusive)
     int steps_taken = 0;
-    int size = 0;
     bool left_to_right = true;
+
+    int current() const {
+      return left_to_right ? (begin + steps_taken) : (end - 1 - steps_taken);
+    }
+
+    int size() const { return end - begin; }
   };
 
   // Computes the set of allowed actions for the current ParserState.
