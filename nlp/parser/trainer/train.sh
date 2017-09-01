@@ -44,7 +44,7 @@
 # - Some training hyperparameters are hard-coded in this script and
 #   can be changed in $HYPERPARAMS below.
 
-set -eux
+set -eu
 
 readonly COMMAND=`echo $0 $@`
 
@@ -58,6 +58,7 @@ DEV_NOGOLD_FILEPATTERN=${SEM}/dev.without-gold.zip
 WORD_EMBEDDINGS_DIM=32
 PRETRAINED_WORD_EMBEDDINGS=$SEM/word2vec-embedding-bi-true-32.tf.recordio
 OOV_FEATURES=true
+FLOW=
 
 # Training hyperparameters.
 BATCH_SIZE=8
@@ -90,6 +91,10 @@ case $i in
     ;;
     --output_dir=*|--output=*|--output_folder=*)
     OUTPUT_FOLDER="${i#*=}"
+    shift
+    ;;
+    --flow=*)
+    FLOW="${i#*=}"
     shift
     ;;
     --train=*|--train_corpus=*)
@@ -244,6 +249,7 @@ then
     --master_spec="${OUTPUT_FOLDER}/master_spec" \
     --hyperparams="${HYPERPARAMS}" \
     --output_folder=${OUTPUT_FOLDER} \
+    --flow=${FLOW} \
     --commons=${COMMONS} \
     --train_corpus=${TRAIN_FILEPATTERN} \
     --dev_corpus=${DEV_GOLD_FILEPATTERN} \

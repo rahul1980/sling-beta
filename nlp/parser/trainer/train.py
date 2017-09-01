@@ -31,6 +31,7 @@ from dragnn.python import graph_builder
 from dragnn.python import trainer_lib
 from dragnn.python import check
 from google.protobuf import text_format
+from convert import convert_model
 
 tf.load_op_library('bazel-bin/nlp/parser/trainer/sempar.so')
 
@@ -51,6 +52,7 @@ flags.DEFINE_string('tf_master', '',
 flags.DEFINE_integer('train_steps', 200000, 'Number of training steps')
 flags.DEFINE_integer('report_every', 500, 'Checkpoint interval')
 flags.DEFINE_integer('batch_size', 8, 'Training batch size')
+flags.DEFINE_string('flow', '', 'Myelin flow file for model output')
 
 def read_corpus(file_pattern):
   docs = []
@@ -201,6 +203,8 @@ def main(unused_argv):
   with tf.Session(FLAGS.tf_master, graph=graph) as sess:
     # Make sure to re-initialize all underlying state.
     sess.run(tf.global_variables_initializer())
+
+    # Run training.
     trainer_lib.run_training(
         sess, trainers, annotator,
         evaluator, [0], # pretrain_steps
@@ -208,7 +212,13 @@ def main(unused_argv):
         dev_corpus_with_gold, FLAGS.batch_size, summary_writer,
         FLAGS.report_every, builder.saver, checkpoint_path)
 
-  tf.logging.info('Best checkpoint written to:\n%s', checkpoint_path)
+    # Convert model to a Myelin flow.
+    if len(FLAGS.flow) != 0:
+      tf.logging.info('Saving flow to %s', FLAGS.flow)
+      flow = convert_model(master_spec, sess)
+      flow.save(FLAGS.flow)
+
+  tf.logging.info('Best checkpoint written to %s', checkpoint_path)
 
 
 if __name__ == '__main__':

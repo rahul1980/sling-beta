@@ -172,7 +172,6 @@ cc_library(
   alwayslink = 1,
 )
 
-
 cc_binary(
   name = "sempar.so",
   deps = [
