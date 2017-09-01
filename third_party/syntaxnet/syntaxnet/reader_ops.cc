@@ -502,13 +502,25 @@ class WordEmbeddingInitializer : public OpKernel {
 
  private:
   // Loads the |vocabulary| from the |vocabulary_path_| file.
+  // The file is assumed to list one word per line, including <UNKNOWN>.
+  // The zero-based line number is taken as the id of the corresponding word.
   void LoadVocabulary(std::unordered_map<string, int64> *vocabulary) const {
     vocabulary->clear();
-    TermFrequencyMap terms;
-    terms.Load(vocabulary_path_, 0 /* min_frequency */, -1 /* max_num_terms */);
+    string text;
+    TF_RETURN_IF_ERROR(
+        ReadFileToString(tensorflow::Env::Default(), vocabulary_path_, &text));
 
-    for (int i = 0; i < terms.Size(); ++i) {
-      (*vocabulary)[terms.GetTerm(i)] = i;
+    // Chomp a trailing newline, if any, to avoid producing a spurious empty
+    // term at the end of the vocabulary file.
+    if (!text.empty() && text.back() == '\n') text.pop_back();
+    for (const string &line : tensorflow::str_util::Split(text, "\n")) {
+      if (vocabulary->find(line) != vocabulary->end()) {
+        return InvalidArgument("Vocabulary file at ", vocabulary_path_,
+                               " contains multiple instances of term: ", line);
+      }
+
+      const int64 index = vocabulary->size();
+      (*vocabulary)[line] = index;
     }
   }
 
