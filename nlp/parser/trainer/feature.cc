@@ -229,9 +229,6 @@ void SemparFeatureExtractor::Extract(SemparFeature::Args *args, int channel)
     for (int i = old_size; i < args->output.size(); ++i) {
       auto &output = args->output[i];
       output.feature_index = index;
-      //LOG(INFO) << feature->name() << " feature at "
-      //          << args->state->current_token_text() << " = "
-      //          << output.id << " = " << feature->FeatureToString(output.id);
       if (args->debug) {
         output.debug = feature->FeatureToString(output.id);
       }
