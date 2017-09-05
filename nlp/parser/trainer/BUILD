@@ -61,7 +61,6 @@ cc_library(
     "//nlp/document:document",
     "//third_party/syntaxnet",
   ],
-  srcs = [],
 )
 
 cc_library(
