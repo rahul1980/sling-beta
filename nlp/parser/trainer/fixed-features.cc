@@ -130,7 +130,7 @@ class WordFeature : public PrecomputedFeature {
       count++;
     }
     CHECK_NE(oov_, -1) << kUnknown << " not in " << file;
-    CHECK_EQ(oov_, 0) << kUnknown << " wasn't the firs entry in " << file;
+    CHECK_EQ(oov_, 0) << kUnknown << " wasn't the first entry in " << file;
     LOG(INFO) << "WordFeature: " << id_to_word_.size() << " words read, "
               << " OOV feature id: " << oov_;
   }
