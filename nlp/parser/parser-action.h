@@ -46,8 +46,7 @@ struct ParserAction {
     // center of attention.
     REFER,
 
-    // Adds slot to frame 'source' with name 'role' and value 'target'. The
-    // source frame become the new center of attention.
+    // Adds slot to frame 0 with name 'role' and value = frame 1.
     CONNECT,
 
     // Adds slot to frame 'source' with name 'role' and value 'type' and moves
@@ -63,10 +62,12 @@ struct ParserAction {
     // 'source' in the attention buffer with 'role' set to the new frame.
     // The new frame become the new center of attention.
     ELABORATE,
+
+    FOCUS,
   };
 
   // Number of action types.
-  static const int kNumActionTypes = ELABORATE + 1;
+  static const int kNumActionTypes = FOCUS + 1;
 
   // Type of the action.
   Type type;
@@ -75,10 +76,10 @@ struct ParserAction {
   // Length of the evoked frame for EVOKE and REFER.
   uint8 length;
 
-  // Source frame index for CONNECT, ASSIGN, ELABORATE.
+  // Source frame index for ASSIGN, ELABORATE, FOCUS.
   uint8 source;
 
-  // Target frame index for CONNECT, EMBED, REFER.
+  // Target frame index for EMBED, REFER.
   uint8 target;
 
   // Role argument for CONNECT, ASSIGN, EMBED, ELABORATE.

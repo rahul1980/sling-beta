@@ -31,6 +31,14 @@ std::vector<string> TransitionSequence::AsStrings(Store *store) const {
   return debug;
 }
 
+string TransitionSequence::DebugString(Store *store) const {
+	std::vector<string> v = AsStrings(store);
+	string output;
+	for (const string &s : v) StrAppend(&output, " ", s);
+
+	return output;
+}
+
 int TransitionSequence::FirstAction(int token) const {
   // The desired action is immediately after the SHIFT action for the
   // previous token. Since there is exactly one SHIFT per token, we simply
@@ -84,7 +92,9 @@ void TransitionGenerator::AttentionIndex::Update(const Action &action) {
       Add(action.frame->handle);
       break;
     }
-    case ParserAction::CONNECT: {
+    case ParserAction::CONNECT:
+			break;
+    case ParserAction::FOCUS: {
       MakeCenter(action.frame->handle);
       break;
     }
@@ -160,9 +170,10 @@ void TransitionGenerator::InitInfo(const Frame &frame,
   for (const Frame &f : pending) InitInfo(f, frame_info, initialized);
 }
 
-ParserAction TransitionGenerator::AttentionIndex::Translate(
+void TransitionGenerator::AttentionIndex::Translate(
     const Document &document,
-    const Action &action) {
+    const Action &action,
+		TransitionSequence *sequence) {
   ParserAction output;
   output.type = action.type;
   switch (action.type) {
@@ -170,6 +181,7 @@ ParserAction TransitionGenerator::AttentionIndex::Translate(
       CHECK_NE(action.length, 0);
       output.length = action.length;
       output.label = action.frame->first_type;
+			sequence->Add(output);
       break;
     }
     case ParserAction::REFER: {
@@ -177,6 +189,7 @@ ParserAction TransitionGenerator::AttentionIndex::Translate(
       output.length = action.length;
       output.target = Index(action.frame->handle);
       SetMaxIndex(output.target);
+			sequence->Add(output);
       break;
     }
     case ParserAction::EMBED: {
@@ -184,6 +197,7 @@ ParserAction TransitionGenerator::AttentionIndex::Translate(
       output.role = action.role;
       output.target = Index(action.other_frame->handle);
       SetMaxIndex(output.target);
+			sequence->Add(output);
       break;
     }
     case ParserAction::ELABORATE: {
@@ -191,14 +205,12 @@ ParserAction TransitionGenerator::AttentionIndex::Translate(
       output.role = action.role;
       output.source = Index(action.other_frame->handle);
       SetMaxIndex(output.source);
+			sequence->Add(output);
       break;
     }
     case ParserAction::CONNECT: {
-      output.source = Index(action.frame->handle);
-      output.target = Index(action.other_frame->handle);
       output.role = action.role;
-      SetMaxIndex(output.source);
-      SetMaxIndex(output.target);
+			sequence->Add(output);
       break;
     }
     case ParserAction::ASSIGN: {
@@ -206,15 +218,20 @@ ParserAction TransitionGenerator::AttentionIndex::Translate(
       output.role = action.role;
       output.label = action.value;
       SetMaxIndex(output.source);
+			sequence->Add(output);
       break;
     }
+    case ParserAction::FOCUS: {
+      output.source = Index(action.frame->handle);
+			if (true || output.source > 0) sequence->Add(output);
+			break;
+		}
     case ParserAction::SHIFT:
     case ParserAction::STOP:
     default:
+			sequence->Add(output);
       break;
   }
-
-  return output;
 }
 
 void TransitionGenerator::Generate(
@@ -315,7 +332,7 @@ void TransitionGenerator::Generate(
     stack.pop_back();
 
     // Translate the action using real attention indices and output it.
-    sequence->Add(attention.Translate(document, action));
+		attention.Translate(document, action, sequence);
 
     // Update the attention index by performing the action.
     attention.Update(action);
@@ -336,13 +353,17 @@ void TransitionGenerator::Generate(
         if (neighbor_info->output) {
           // Neighbor has already been output earlier. Output a CONNECT action.
           stack.emplace_back(ParserAction::CONNECT);
-          Action &latest = stack.back();
-          latest.frame = edge.incoming ? neighbor_info : action.frame,
-          latest.role = edge.role;
-          latest.other_frame = edge.incoming ? action.frame : neighbor_info;
+          stack.back().role = edge.role;
           edge.used = true;
           CHECK_NE(edge.inverse, -1);
           neighbor_info->edges[edge.inverse].used = true;
+					if (edge.incoming) {	
+						stack.emplace_back(ParserAction::FOCUS, neighbor_info);
+						stack.emplace_back(ParserAction::FOCUS, action.frame);
+					} else {
+						stack.emplace_back(ParserAction::FOCUS, action.frame);
+						stack.emplace_back(ParserAction::FOCUS, neighbor_info);
+					}
         }
       }
 

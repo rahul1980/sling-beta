@@ -59,13 +59,13 @@ void ActionTable::Add(const ParserState &state,
       overall_index_.Add(source);
       type_[state.type(source)].assign.emplace(action.role, action.label);
       break;
-    case ParserAction::CONNECT: {
-      connect_source_.Add(source);
-      connect_target_.Add(target);
+    case ParserAction::FOCUS:
+      focus_source_.Add(source);
       overall_index_.Add(source);
-      overall_index_.Add(target);
-      Handle source_type = state.type(source);
-      type_[source_type].connect[state.type(target)].insert(action.role);
+      break;
+    case ParserAction::CONNECT: {
+      Handle source_type = state.type(0);
+      type_[source_type].connect[state.type(1)].insert(action.role);
       break;
     }
     case ParserAction::EMBED: {
@@ -166,23 +166,28 @@ void ActionTable::Allowed(
       }
     }
 
+    // Output allowed FOCUS actions.
+		if (i <= max_focus_source_) {
+      ParserAction action;
+      action.type = ParserAction::FOCUS;
+      action.source = i;
+			int index = Index(action);
+			if (index != -1 && state.CanApply(action)) (*allowed)[index] = true;
+		}
+
     // Output allowed CONNECT actions.
-    if (i <= max_connect_source_) {
+		if (i == 0 && attention_size > 1) {
       ParserAction action;
       action.type = ParserAction::CONNECT;
-      action.source = i;
-      for (int j = 0; j <= max_connect_target_ && j < attention_size; ++j) {
-        const auto &it2 = type_constraints.connect.find(state.type(j));
-        if (it2 != type_constraints.connect.end()) {
-          action.target = j;
-          for (Handle role : it2->second) {
-            action.role = role;
-            int index = Index(action);
-            if (index != -1 && state.CanApply(action)) (*allowed)[index] = true;
-          }
+      const auto &it2 = type_constraints.connect.find(state.type(1));
+      if (it2 != type_constraints.connect.end()) {
+        for (Handle role : it2->second) {
+          action.role = role;
+          int index = Index(action);
+          if (index != -1 && state.CanApply(action)) (*allowed)[index] = true;
         }
       }
-    }
+	  }
 
     // Output allowed EMBED actions.
     if (i <= max_embed_target_) {
@@ -274,8 +279,7 @@ void ActionTable::Init(Store *store) {
   max_refer_target_ = top.GetInt("/table/max_refer_target");
   max_embed_target_ = top.GetInt("/table/max_embed_target");
   max_elaborate_source_ = top.GetInt("/table/max_elaborate_source");
-  max_connect_source_ = top.GetInt("/table/max_connect_source");
-  max_connect_target_ = top.GetInt("/table/max_connect_target");
+  max_focus_source_ = top.GetInt("/table/max_focus_source");
   max_assign_source_ = top.GetInt("/table/max_assign_source");
   max_span_length_ = top.GetInt("/table/max_span_length");
   max_actions_per_token_ = top.GetInt("/table/max_actions_per_token");
@@ -284,8 +288,7 @@ void ActionTable::Init(Store *store) {
   if (max_index_ < max_refer_target_) max_index_ = max_refer_target_;
   if (max_index_ < max_embed_target_) max_index_ = max_embed_target_;
   if (max_index_ < max_elaborate_source_) max_index_ = max_elaborate_source_;
-  if (max_index_ < max_connect_source_) max_index_ = max_connect_source_;
-  if (max_index_ < max_connect_target_) max_index_ = max_connect_target_;
+  if (max_index_ < max_focus_source_) max_index_ = max_focus_source_;
   if (max_index_ < max_assign_source_) max_index_ = max_assign_source_;
 
   // Read the action index.
@@ -344,8 +347,6 @@ void ActionTable::Init(Store *store) {
         beyond_bounds = action.length > max_span_length_;
         break;
       case ParserAction::CONNECT:
-        beyond_bounds = (action.source > max_connect_source_) ||
-            (action.target > max_connect_target_);
         break;
       case ParserAction::ASSIGN:
         beyond_bounds = action.source > max_assign_source_;
@@ -356,6 +357,9 @@ void ActionTable::Init(Store *store) {
       case ParserAction::ELABORATE:
         beyond_bounds = action.source > max_elaborate_source_;
         break;
+      case ParserAction::FOCUS:
+        beyond_bounds = action.source > max_focus_source_;
+				break;
       default:
         break;
     }
@@ -459,10 +463,7 @@ string ActionTable::Serialize(const Store *global, int percentile) const {
   top.Add("/table/max_refer_target", refer_target_.PercentileBin(percentile));
   top.Add("/table/max_elaborate_source",
           elaborate_source_.PercentileBin(percentile));
-  top.Add("/table/max_connect_source",
-          connect_source_.PercentileBin(percentile));
-  top.Add("/table/max_connect_target",
-          connect_target_.PercentileBin(percentile));
+  top.Add("/table/max_focus_source", focus_source_.PercentileBin(percentile));
   top.Add("/table/max_assign_source", assign_source_.PercentileBin(percentile));
   top.Add("/table/max_span_length", span_length_.PercentileBin(percentile));
   top.Add("/table/max_actions_per_token", max_actions_per_token_);
@@ -489,14 +490,12 @@ string ActionTable::Serialize(const Store *global, int percentile) const {
     }
     if (type == ParserAction::ASSIGN ||
         type == ParserAction::ELABORATE ||
-        type == ParserAction::CONNECT) {
+        type == ParserAction::FOCUS) {
       if (action.source != 0) {
         b.Add(action_source, static_cast<int>(action.source));
       }
     }
-    if (type == ParserAction::EMBED ||
-        type == ParserAction::REFER ||
-        type == ParserAction::CONNECT) {
+    if (type == ParserAction::EMBED || type == ParserAction::REFER) {
       if (action.target != 0) {
         b.Add(action_target, static_cast<int>(action.target));
       }
@@ -645,8 +644,7 @@ void ActionTable::OutputSummary(TableWriter *writer) const {
   refer_target_.ToTable(writer);
   embed_target_.ToTable(writer);
   elaborate_source_.ToTable(writer);
-  connect_source_.ToTable(writer);
-  connect_target_.ToTable(writer);
+  focus_source_.ToTable(writer);
   assign_source_.ToTable(writer);
 
   // Arguments summary.

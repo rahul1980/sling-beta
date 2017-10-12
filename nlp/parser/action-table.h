@@ -94,8 +94,7 @@ class ActionTable {
 
   // Accessors for various indices.
   int max_refer_target() const { return max_refer_target_; }
-  int max_connect_source() const { return max_connect_source_; }
-  int max_connect_target() const { return max_connect_target_; }
+  int max_focus_source() const { return max_focus_source_; }
   int max_assign_source() const { return max_assign_source_; }
   int max_embed_target() const { return max_embed_target_; }
   int max_elaborate_source() const { return max_elaborate_source_; }
@@ -232,8 +231,7 @@ class ActionTable {
   Histogram refer_target_{"Refer Target Histogram"};
   Histogram embed_target_{"Embed Target Histogram"};
   Histogram elaborate_source_{"Elaborate Source Histogram"};
-  Histogram connect_source_{"Connect Source Histogram"};
-  Histogram connect_target_{"Connect Target Histogram"};
+  Histogram focus_source_{"Focus Source Histogram"};
   Histogram assign_source_{"Assign Source Histogram"};
   Histogram overall_index_{"Overall Frame Index Histogram"};
   Histogram span_length_{"Span Length Histogram"};
@@ -245,8 +243,7 @@ class ActionTable {
   int max_refer_target_;
   int max_embed_target_;
   int max_elaborate_source_;
-  int max_connect_source_;
-  int max_connect_target_;
+  int max_focus_source_;
   int max_assign_source_;
 
   // Maximum of all the above indices.

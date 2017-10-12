@@ -28,6 +28,7 @@ string ParserAction::TypeName(Type type) {
     case ParserAction::ASSIGN: return "ASSIGN";
     case ParserAction::EMBED: return "EMBED";
     case ParserAction::ELABORATE: return "ELABORATE";
+    case ParserAction::FOCUS: return "FOCUS";
     case ParserAction::SHIFT: return "SHIFT";
     case ParserAction::STOP: return "STOP";
   }
@@ -49,7 +50,7 @@ string ParserAction::ToString(Store *store) const {
       StrAppend(&s, "len=", length, ":", target);
       break;
     case ParserAction::CONNECT:
-      StrAppend(&s, source, " -> ", store->DebugString(role), " -> ", target);
+      StrAppend(&s, store->DebugString(role));
       break;
     case ParserAction::ASSIGN:
       StrAppend(&s, source, " -> ", store->DebugString(role), " -> ",
@@ -64,6 +65,9 @@ string ParserAction::ToString(Store *store) const {
       StrAppend(&s, "TYPE(", store->DebugString(label), ")",
                 " <- ", store->DebugString(role), " <- ",
                 source);
+      break;
+    case ParserAction::FOCUS:
+      StrAppend(&s, source);
       break;
     case ParserAction::SHIFT:
     case ParserAction::STOP:

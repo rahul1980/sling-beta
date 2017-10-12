@@ -219,7 +219,8 @@ then
     --output_dir=${OUTPUT_FOLDER} \
     --word_embeddings=${PRETRAINED_WORD_EMBEDDINGS} \
     --word_embeddings_dim=${WORD_EMBEDDINGS_DIM} \
-    --oov_lstm_features=${OOV_FEATURES}
+    --oov_lstm_features=${OOV_FEATURES} \
+		--logtostderr
 fi
 
 if [[ "$DO_TRAINING" -eq 1 ]];

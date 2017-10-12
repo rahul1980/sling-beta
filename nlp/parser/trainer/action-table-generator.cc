@@ -105,6 +105,8 @@ void ActionTableGenerator::Process(
   ParserState state(&store, start, end);
   int actions = 0;
   int shift_action = 0;
+	//LOG_FIRST_N(INFO, 50) << ToText(document.top(), 2) << "\nGold: "
+	//	<< gold_sequence.DebugString(&store);
   for (const ParserAction &action : gold_sequence.actions()) {
     uint64 fp = 0;
     if (action.type == ParserAction::EVOKE ||

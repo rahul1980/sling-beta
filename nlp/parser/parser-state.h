@@ -125,10 +125,11 @@ class ParserState {
   void Stop();
   void Evoke(int length, Handle type);
   void Refer(int length, int frame);
-  void Connect(int source, Handle role, int target);
+  void Connect(Handle role);
   void Assign(int frame, Handle role, Handle value);
   void Embed(int frame, Handle role, Handle type);
   void Elaborate(int frame, Handle role, Handle type);
+  void Focus(int frame);
 
   // Returns true if the frame at the given absolute index has the given type.
   bool FrameHasType(int index, Handle type) const {

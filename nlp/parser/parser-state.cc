@@ -91,7 +91,7 @@ void ParserState::Apply(const ParserAction &action) {
       break;
 
     case ParserAction::CONNECT:
-      Connect(action.source, action.role, action.target);
+      Connect(action.role);
       break;
 
     case ParserAction::ASSIGN:
@@ -104,6 +104,10 @@ void ParserState::Apply(const ParserAction &action) {
 
     case ParserAction::ELABORATE:
       Elaborate(action.source, action.role, action.label);
+      break;
+
+    case ParserAction::FOCUS:
+      Focus(action.source);
       break;
   }
 }
@@ -202,15 +206,12 @@ bool ParserState::CanApply(const ParserAction &action) const {
       // Check that we are not done.
       if (done_) return false;
 
-      // Check that source and target are valid indices.
-      int source = action.source;
-      int target = action.target;
-      if (source < 0 || source >= attention_.size()) return false;
-      if (target < 0 || target >= attention_.size()) return false;
+      // Check that we have >=2 frames in the attention.
+      if (attention_.size() < 2) return false;
 
       // Check that we haven't output this connection before.
-      Frame frame(store_, frames_[Attention(source)]);
-      return !SlotPresent(frame, action.role, Attention(target));
+      Frame frame(store_, frames_[Attention(0)]);
+      return !SlotPresent(frame, action.role, Attention(1));
     }
 
     case ParserAction::EMBED: {
@@ -246,6 +247,12 @@ bool ParserState::CanApply(const ParserAction &action) const {
 
       return true;
     }
+
+    case ParserAction::FOCUS: {
+      // Check that source is a valid index into the attention buffer.
+      int source = action.source;
+      return (source >= 0 && source < attention_.size());
+		}
   }
 
   return false;
@@ -295,17 +302,18 @@ void ParserState::Refer(int length, int index) {
   Center(index);
 }
 
-void ParserState::Connect(int source, Handle role, int target) {
+void ParserState::Connect(Handle role) {
   // Create new frame with an additional role linking source to target. The role
   // value is encoded as an index into the frame buffer. The new frame replaces
   // the old frame in the frame buffer.
-  int source_index = Attention(source);
-  int target_index = Attention(target);
+  int source_index = Attention(0);
+  int target_index = Attention(1);
   Handle value = Handle::Index(target_index);
   frames_[source_index] = store_->Extend(frames_[source_index], role, value);
+}
 
-  // Move the source frame to the center of attention.
-  Center(source);
+void ParserState::Focus(int frame) {
+  Center(frame);
 }
 
 void ParserState::Assign(int frame, Handle role, Handle value) {

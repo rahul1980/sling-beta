@@ -43,6 +43,8 @@ class TransitionSequence {
   // Returns the actions as human-readable strings.
   std::vector<string> AsStrings(Store *store) const;
 
+	string DebugString(Store *store) const;
+
   // Clears the sequence.
   void Clear() { actions_.clear(); }
 
@@ -160,7 +162,7 @@ class TransitionGenerator {
     ParserAction::Type type;
 
     // The frame being created in EVOKE/EMBED/ELABORATE, or the source
-    // frame in CONNECT/ASSIGN, or the referred frame in REFER.
+    // frame in ASSIGN/FOCUS, or the referred frame in REFER.
     FrameInfo *frame = nullptr;
 
     // Role argument in CONNECT, ASSIGN, EMBED, and ELABORATE.
@@ -202,8 +204,9 @@ class TransitionGenerator {
     // Updates the index as per the consequence of 'action'.
     void Update(const Action &action);
 
-    // Translates 'action'' into a ParserAction using attention index arguments.
-    ParserAction Translate(const Document &document, const Action &action);
+    // Translates 'action' into ParserAction(s) using attention index arguments.
+    void Translate(const Document &document, const Action &action,
+				TransitionSequence *sequence);
 
     // Returns the maximum attention index used so far in any Translate call.
     int MaxIndex() const { return max_index_; }
